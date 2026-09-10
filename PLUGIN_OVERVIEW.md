@@ -40,12 +40,20 @@ Element text is written as markdown:
 Only the fields that apply to the element are emitted, and free-form text keeps its full
 length — only the heading is trimmed for scannability.
 
-## What is never copied
+## What redaction does and does not cover
 
-Password fields and anything that looks like a credential are excluded: an element whose
-type is `password`, or whose name, id, or autocomplete attribute matches
-password/credential/secret/token/api-key/auth, contributes no text and no value. Images of
-such a field are still possible, so pick deliberately.
+Redaction is a heuristic applied to form fields only. An `<input>` or `<textarea>` whose type
+is `password`, or whose name, id, or autocomplete attribute matches
+password/credential/secret/token/api-key/auth, contributes no text and no value. That covers
+more than passwords — a field named `api_key` or `auth_token` is caught too.
+
+It does not cover anything that is not a form field. A token, key, or secret rendered in a
+`<code>` block, a `<div>`, or any other non-input element matches nothing and is copied
+verbatim into the markdown block, which may then go to an agent. Treat a picked element the
+way you would treat anything else you paste.
+
+Images are not redacted at all: **Element image** and **Screenshot** capture whatever is on
+screen, so an image of a secret field is possible. Pick deliberately.
 
 ## Requirements
 
