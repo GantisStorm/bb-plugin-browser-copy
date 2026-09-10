@@ -15,17 +15,6 @@ export type Target = z.infer<typeof targetSchema>;
 export const copyModeSchema = z.enum(["text", "element-image", "screen-image"]);
 export type CopyMode = z.infer<typeof copyModeSchema>;
 
-export const pageSnapshotSchema = z.object({
-  documentId: z.string().min(1),
-  url: z.string(),
-  width: z.number().finite(),
-  height: z.number().finite(),
-  scrollX: z.number().finite(),
-  scrollY: z.number().finite(),
-  scale: z.number().finite(),
-});
-export type PageSnapshot = z.infer<typeof pageSnapshotSchema>;
-
 export const elementInfoSchema = z.object({
   tag: z.string(),
   selector: z.string(),
@@ -108,7 +97,6 @@ export const rpcContract = {
     input: targetSchema
       .extend({
         mode: copyModeSchema,
-        page: pageSnapshotSchema.nullable(),
       })
       .strict(),
     output: z

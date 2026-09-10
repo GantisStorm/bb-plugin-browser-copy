@@ -1,17 +1,29 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { CursorInWindowIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { toast } from "sonner";
 import {
   definePluginApp,
-  useBbNavigate,
   useRpc,
   type PluginThreadHeaderActionProps,
-  type PluginThreadPanelProps,
 } from "@get-bb/plugin-sdk/app";
-import type {
-  rpcContract,
-  CopyMode,
-  ElementInfo,
-  Target,
-} from "./contracts.js";
+import type { rpcContract, CopyMode, Target } from "./contracts.js";
+
+/**
+ * Injected by `bb plugin build`. The menu is portalled to the document body,
+ * so it has to carry the plugin style-scope attributes itself or the plugin's
+ * compiled utilities (scoped to `[data-bb-plugin]` roots) would not apply.
+ */
+declare const __BB_PLUGIN_ID__: string | undefined;
+
+const PORTAL_SCOPE = {
+  "data-bb-portaled-overlay": "",
+  "data-bb-plugin-root": "",
+  ...(typeof __BB_PLUGIN_ID__ === "string"
+    ? { "data-bb-plugin": __BB_PLUGIN_ID__ }
+    : {}),
+};
 
 type Discovered = {
   hostId: string;
@@ -19,14 +31,11 @@ type Discovered = {
   generation: string;
   tab: { tabId: string; title: string; url: string };
 };
+
 const keyOf = (item: Discovered) =>
   JSON.stringify([item.hostId, item.instanceId, item.generation, item.tab.tabId]);
-const primaryClass =
-  "min-h-11 rounded border border-border bg-background px-3 py-2 text-sm hover:bg-state-hover disabled:opacity-40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
-const modeClass = (active: boolean) =>
-  active
-    ? "rounded border border-border bg-state-hover px-3 py-2 text-sm text-foreground disabled:opacity-40"
-    : "rounded border border-border bg-background px-3 py-2 text-sm text-muted-foreground hover:bg-state-hover disabled:opacity-40";
+
+const MODES: readonly CopyMode[] = ["text", "element-image", "screen-image"];
 
 const MODE_LABELS: Record<CopyMode, string> = {
   text: "Element text",
@@ -34,218 +43,233 @@ const MODE_LABELS: Record<CopyMode, string> = {
   "screen-image": "Screen",
 };
 
-function elementMarkdown(element: ElementInfo): string {
-  const lines = [`Tag: ${element.tag}`, `Selector: ${element.selector}`];
-  if (element.role) lines.push(`Role: ${element.role}`);
-  if (element.name) lines.push(`Name: ${element.name}`);
-  if (element.text) lines.push(`Text: ${element.text}`);
-  if (element.link) lines.push(`Link: ${element.link}`);
-  if (element.value) lines.push(`Value: ${element.value}`);
-  return lines.join("\n");
-}
+const MODE_TOASTS: Record<CopyMode, string> = {
+  text: "Element text copied",
+  "element-image": "Element image copied",
+  "screen-image": "Screen copied",
+};
 
-function BrowserCopyHeaderAction(_: PluginThreadHeaderActionProps) {
-  const navigate = useBbNavigate();
-  return (
-    <button
-      type="button"
-      aria-label="Copy Browser element"
-      title="Copy Browser element"
-      onClick={() =>
-        navigate.openThreadPanel({ actionId: "browser-copy", params: null })
-      }
-      className="flex h-7 items-center gap-1 rounded px-1.5 text-xs text-muted-foreground hover:bg-state-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-    >
-      <svg
-        aria-hidden
-        viewBox="0 0 24 24"
-        className="size-3.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <rect x="8" y="8" width="12" height="12" rx="2" />
-        <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
-      </svg>
-      Copy
-    </button>
-  );
-}
+const TRIGGER_LABEL = "Copy Browser Element";
 
-function BrowserCopyPanel({ threadId }: PluginThreadPanelProps) {
+// Same box, glyph sizing, and coarse-pointer step as bb's own header icon
+// buttons, so this sits in the action row without looking foreign.
+const triggerClass =
+  "flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:bg-state-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-state-hover data-[state=open]:text-foreground disabled:opacity-40 max-md:pointer-coarse:h-9 max-md:pointer-coarse:w-9 [&_svg]:size-[16px] max-md:pointer-coarse:[&_svg]:size-[20px]";
+
+const contentClass =
+  "z-50 min-w-40 overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md";
+
+const labelClass =
+  "px-2 py-[0.3125rem] text-xs font-medium text-muted-foreground";
+
+const separatorClass = "-mx-1 my-1 h-px bg-muted";
+
+const hintClass = "px-2 py-[0.3125rem] text-xs text-muted-foreground";
+
+const itemBaseClass =
+  "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 text-xs outline-none focus:bg-state-hover focus:text-foreground hover:bg-state-hover hover:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
+
+// The same icon set bb draws its own chrome from: a browser window with the
+// pointer inside it, which is what this button does — pick something in the page.
+const copyIcon = (
+  <HugeiconsIcon icon={CursorInWindowIcon} size={16} strokeWidth={1.8} />
+);
+
+const spinnerIcon = (
+  <svg
+    aria-hidden
+    viewBox="0 0 24 24"
+    className="animate-spin"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+  >
+    <path d="M12 3a9 9 0 1 0 9 9" />
+  </svg>
+);
+
+const checkIcon = (
+  <svg
+    aria-hidden
+    viewBox="0 0 24 24"
+    className="size-3.5"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="m5 12.5 4.5 4.5L19 7" />
+  </svg>
+);
+
+function BrowserCopyHeaderAction({
+  threadId,
+  isCompactViewport,
+}: PluginThreadHeaderActionProps) {
   const rpc = useRpc<typeof rpcContract>();
+  const [open, setOpen] = useState(false);
   const [targets, setTargets] = useState<Discovered[]>([]);
   const [selected, setSelected] = useState("");
-  const [mode, setMode] = useState<CopyMode>("text");
+  const [discovering, setDiscovering] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastResult, setLastResult] = useState<{
-    element: ElementInfo | null;
-    copied: boolean;
-  } | null>(null);
-  const [refreshIndex, setRefreshIndex] = useState(0);
-  const mounted = useRef(true);
+  const alive = useRef(true);
+  const discovery = useRef(0);
   const running = useRef(false);
 
-  const target = useMemo<Target | null>(() => {
-    const item = targets.find((candidate) => keyOf(candidate) === selected);
-    return item
-      ? {
-          hostId: item.hostId,
-          instanceId: item.instanceId,
-          generation: item.generation,
-          threadId,
-          tabId: item.tab.tabId,
-        }
-      : null;
-  }, [selected, targets, threadId]);
-
   useEffect(() => {
-    mounted.current = true;
-    void rpc
-      .call("discover", { threadId })
-      .then(({ targets: next }) => {
-        if (!mounted.current) return;
-        setTargets(next);
-        setSelected((current) =>
-          next.some((item) => keyOf(item) === current)
-            ? current
-            : next.length === 1
-              ? keyOf(next[0])
-              : "",
-        );
-      })
-      .catch((reason) => {
-        if (mounted.current)
-          setError(reason instanceof Error ? reason.message : String(reason));
-      });
+    alive.current = true;
     return () => {
-      mounted.current = false;
+      alive.current = false;
     };
-  }, [rpc, threadId, refreshIndex]);
+  }, []);
 
-  const start = () => {
-    if (!target) return;
-    if (running.current) return;
+  const discover = useCallback(async () => {
+    const attempt = ++discovery.current;
+    setDiscovering(true);
+    try {
+      const { targets: next } = await rpc.call("discover", { threadId });
+      if (!alive.current || attempt !== discovery.current) return;
+      setTargets(next);
+      setSelected((current) =>
+        next.some((item) => keyOf(item) === current)
+          ? current
+          : next[0] !== undefined
+            ? keyOf(next[0])
+            : "",
+      );
+      setError(null);
+    } catch (reason) {
+      if (!alive.current || attempt !== discovery.current) return;
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      if (alive.current && attempt === discovery.current) setDiscovering(false);
+    }
+  }, [rpc, threadId]);
+
+  const found = targets.find((candidate) => keyOf(candidate) === selected);
+  const target: Target | null = found
+    ? {
+        hostId: found.hostId,
+        instanceId: found.instanceId,
+        generation: found.generation,
+        threadId,
+        tabId: found.tab.tabId,
+      }
+    : null;
+
+  const run = (mode: CopyMode) => {
+    if (target === null || running.current) return;
     running.current = true;
     setBusy(true);
-    setError(null);
-    setLastResult(null);
     void rpc
-      .call("copy", { ...target, mode, page: null })
+      .call("copy", { ...target, mode })
       .then((result) => {
-        if (!mounted.current) return;
-        setLastResult({ element: result.element, copied: result.copied });
+        if (!alive.current) return;
+        if (result.copied) toast.success(MODE_TOASTS[mode]);
+        else toast.error("Nothing reached the clipboard. Try again");
       })
       .catch((reason) => {
-        if (mounted.current)
-          setError(reason instanceof Error ? reason.message : String(reason));
+        if (alive.current)
+          toast.error(reason instanceof Error ? reason.message : String(reason));
       })
       .finally(() => {
         running.current = false;
-        if (mounted.current) setBusy(false);
+        if (alive.current) setBusy(false);
       });
   };
 
-  const label =
-    mode === "text"
-      ? "Pick an element"
-      : mode === "element-image"
-        ? "Pick an element"
-        : "Copy screen to clipboard";
-  const hint =
-    mode === "screen-image"
-      ? "Copies the visible Browser tab to the clipboard."
-      : "Click the element in the Browser tab to copy it. Password and secret fields are never copied.";
+  const itemClass = `${itemBaseClass} ${
+    isCompactViewport ? "min-h-11" : "min-h-8 py-[0.3125rem]"
+  }`;
 
   return (
-    <div className="flex min-h-0 flex-col gap-3 p-3 text-sm text-foreground">
-      <header>
-        <h2 className="font-medium">Browser Copy</h2>
-        <p className="text-xs text-muted-foreground">{hint}</p>
-      </header>
-      <label className="grid gap-1 text-xs text-muted-foreground">
-        Browser tab
-        <select
-          className="min-h-11 w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground"
-          value={selected}
-          disabled={busy}
-          onChange={(event) => {
-            setSelected(event.target.value);
-            setLastResult(null);
-          }}
-        >
-          <option value="">Choose a tab</option>
-          {targets.map((item) => (
-            <option key={keyOf(item)} value={keyOf(item)}>
-              {item.tab.title || item.tab.url || "Blank tab"}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="flex flex-wrap gap-2">
-        {(Object.keys(MODE_LABELS) as CopyMode[]).map((candidate) => (
-          <button
-            key={candidate}
-            type="button"
-            className={modeClass(mode === candidate)}
-            disabled={busy}
-            onClick={() => setMode(candidate)}
-          >
-            {MODE_LABELS[candidate]}
-          </button>
-        ))}
-      </div>
-      <button
-        type="button"
-        className={primaryClass}
-        disabled={!target || busy}
-        onClick={start}
-      >
-        {busy ? "Working…" : label}
-      </button>
-      <div className="flex flex-wrap gap-2">
+    <DropdownMenu.Root
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) void discover();
+      }}
+    >
+      <DropdownMenu.Trigger asChild disabled={busy}>
         <button
           type="button"
-          className={primaryClass}
-          disabled={busy}
-          onClick={() => setRefreshIndex((index) => index + 1)}
+          aria-label={TRIGGER_LABEL}
+          aria-busy={busy}
+          title={TRIGGER_LABEL}
+          className={triggerClass}
         >
-          Refresh tabs
+          {busy ? spinnerIcon : copyIcon}
         </button>
-      </div>
-      {error ? (
-        <p role="alert" className="text-destructive-text">
-          {error}
-        </p>
-      ) : null}
-      {lastResult ? (
-        <div className="grid gap-1">
-          <p className="text-xs text-muted-foreground">
-            {lastResult.copied
-              ? "Copied to the clipboard"
-              : "Captured — use Copy above to retry"}
-          </p>
-          {lastResult.element ? (
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded border border-border bg-surface-recessed p-2 text-xs">
-              {elementMarkdown(lastResult.element)}
-            </pre>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          {...PORTAL_SCOPE}
+          side="bottom"
+          align="start"
+          sideOffset={4}
+          className={contentClass}
+        >
+          {error !== null ? (
+            <p role="alert" className={`${hintClass} text-destructive-text`}>
+              {error}
+            </p>
           ) : null}
-        </div>
-      ) : null}
-    </div>
+          {targets.length > 1 ? (
+            <>
+              <DropdownMenu.Label className={labelClass}>
+                Browser tab
+              </DropdownMenu.Label>
+              <DropdownMenu.RadioGroup
+                value={selected}
+                onValueChange={setSelected}
+              >
+                {targets.map((candidate) => (
+                  <DropdownMenu.RadioItem
+                    key={keyOf(candidate)}
+                    value={keyOf(candidate)}
+                    className={`${itemClass} pr-7`}
+                  >
+                    <span className="truncate">
+                      {candidate.tab.title || candidate.tab.url || "Blank tab"}
+                    </span>
+                    <DropdownMenu.ItemIndicator className="absolute right-2 flex items-center">
+                      {checkIcon}
+                    </DropdownMenu.ItemIndicator>
+                  </DropdownMenu.RadioItem>
+                ))}
+              </DropdownMenu.RadioGroup>
+              <DropdownMenu.Separator className={separatorClass} />
+            </>
+          ) : null}
+          <DropdownMenu.Group>
+            {MODES.map((mode) => (
+              <DropdownMenu.Item
+                key={mode}
+                className={itemClass}
+                disabled={target === null}
+                onSelect={() => run(mode)}
+              >
+                {MODE_LABELS[mode]}
+              </DropdownMenu.Item>
+            ))}
+          </DropdownMenu.Group>
+          {targets.length === 0 && error === null ? (
+            <p className={hintClass}>
+              {discovering
+                ? "Looking for Browser tabs…"
+                : "No Browser tab is open in this thread"}
+            </p>
+          ) : null}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }
 
 export default definePluginApp((app) => {
-  app.slots.threadPanelAction({
-    id: "browser-copy",
-    title: "Copy from Browser",
-    icon: "Copy",
-    component: BrowserCopyPanel,
-  });
   app.slots.experimental_threadHeaderAction({
     id: "browser-copy",
     title: "Browser Copy",
