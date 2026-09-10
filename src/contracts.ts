@@ -54,15 +54,10 @@ export const imageSchema = z.object({
 export type Image = z.infer<typeof imageSchema>;
 
 export const hostContract = {
-  measure: {
-    input: z.object({ wsEndpoint: z.string().url() }).strict(),
-    output: pageSnapshotSchema,
-  },
   elementPick: {
     input: z
       .object({
         wsEndpoint: z.string().url(),
-        page: pageSnapshotSchema,
         image: z.boolean(),
       })
       .strict(),

@@ -3,8 +3,6 @@ import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import {
   hostContract,
   elementInfoSchema,
-  pageSnapshotSchema,
-  type PageSnapshot,
 } from "./contracts.js";
 
 const delay = (milliseconds: number) => {
@@ -76,16 +74,100 @@ const elementPickExpression = (wantImage: boolean) => `
     if (info.value) lines.push("Value: " + info.value);
     return lines.join("\\n");
   };
+  const PICKABLE = "a, button, input, textarea, select, [role], h1, h2, h3, h4, h5, h6, p, li, td, th, img, video, [contenteditable], [onclick], [data-testid], article, section, div, span";
+  const resolveTarget = (node) => (node instanceof Element ? node.closest(PICKABLE) || node : null);
+  const isOwnNode = (node) => node instanceof Element && node.closest("#__bbToast, #__bbCopyHighlight, #__bbCopyHighlightLabel") !== null;
+  const isRootNode = (element) => element === document.documentElement || element === document.body;
   let picked = false;
   const expireAt = performance.now() + 20000;
-  let overlayNode = null;
+  let box = null;
+  let badge = null;
+  const overlays = () => {
+    if (box !== null) return;
+    box = document.createElement("div");
+    box.id = "__bbCopyHighlight";
+    box.style.cssText = "position:fixed;z-index:2147483645;pointer-events:none;display:none;border:2px solid #3b82f6;background:rgba(59,130,246,.15);border-radius:3px";
+    badge = document.createElement("div");
+    badge.id = "__bbCopyHighlightLabel";
+    badge.style.cssText = "position:fixed;z-index:2147483646;pointer-events:none;display:none;background:#2563eb;color:#fff;font:11px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;padding:2px 6px;border-radius:4px;max-width:60vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+    document.documentElement.appendChild(box);
+    document.documentElement.appendChild(badge);
+  };
+  const hideBox = () => {
+    if (box === null) return;
+    box.style.display = "none";
+    badge.style.display = "none";
+  };
+  const dropBox = () => {
+    if (box === null) return;
+    box.remove();
+    badge.remove();
+    box = null;
+    badge = null;
+  };
+  const labelFor = (element) => {
+    const tag = element.tagName.toLowerCase();
+    const inputish = tag === "input" || tag === "textarea";
+    const secretish = inputish && (element.type === "password" || SENSITIVE.test((element.name || "") + " " + (element.id || "") + " " + (element.getAttribute("autocomplete") || "")));
+    const id = element.id ? "#" + element.id : "";
+    if (secretish) return tag + id;
+    if (inputish) {
+      const value = String(element.value || "").replace(/\\s+/g, " ").trim();
+      return tag + id + (value ? " · " + value.slice(0, 40) : "");
+    }
+    const text = String(element.innerText || element.textContent || "").replace(/\\s+/g, " ").trim();
+    return tag + id + (text ? " · " + text.slice(0, 60) : "");
+  };
+  const paint = (element) => {
+    overlays();
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 1 && rect.height < 1) {
+      hideBox();
+      return;
+    }
+    box.style.display = "block";
+    box.style.left = rect.left - 2 + "px";
+    box.style.top = rect.top - 2 + "px";
+    box.style.width = rect.width + "px";
+    box.style.height = rect.height + "px";
+    badge.textContent = labelFor(element);
+    badge.style.display = "block";
+    const viewportWidth = document.documentElement.clientWidth || innerWidth;
+    badge.style.left = Math.max(4, Math.min(rect.left, viewportWidth - 180)) + "px";
+    badge.style.top = Math.max(2, rect.top > 24 ? rect.top - 22 : rect.bottom + 6) + "px";
+  };
+  let lastX = -1;
+  let lastY = -1;
+  const refresh = () => {
+    if (picked || lastX < 0) return;
+    const node = document.elementFromPoint(lastX, lastY);
+    const element = isOwnNode(node) ? null : resolveTarget(node);
+    if (element === null || isRootNode(element)) {
+      hideBox();
+      return;
+    }
+    paint(element);
+  };
+  const onMove = (event) => {
+    if (picked) return;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    const element = isOwnNode(event.target) ? null : resolveTarget(event.target);
+    if (element === null || isRootNode(element)) {
+      hideBox();
+      return;
+    }
+    paint(element);
+  };
   const cleanup = () => {
     if (document.documentElement.style.cursor === "crosshair") document.documentElement.style.cursor = "";
-    if (overlayNode && overlayNode.parentNode) overlayNode.remove();
-    overlayNode = null;
+    dropBox();
     const stray = document.getElementById("__bbCopyGuard");
     if (stray && stray.parentNode) stray.remove();
+    document.removeEventListener("mousemove", onMove, true);
     document.removeEventListener("click", onClick, true);
+    window.removeEventListener("scroll", refresh, true);
+    window.removeEventListener("resize", refresh, true);
     if (window.__bbCopyCleanup === cleanup) window.__bbCopyCleanup = null;
   };
   window.__bbCopyCleanup && window.__bbCopyCleanup();
@@ -113,14 +195,18 @@ const elementPickExpression = (wantImage: boolean) => `
       cleanup();
       return;
     }
-    const element = event.target instanceof Element ? event.target.closest("a, button, input, textarea, select, [role], h1, h2, h3, h4, h5, h6, p, li, td, th, img, video, [contenteditable], [onclick], [data-testid], article, section, div, span") || event.target : event.target;
-    if (!(element instanceof Element)) return;
+    if (isOwnNode(event.target)) return;
+    const element = resolveTarget(event.target);
+    if (element === null || isRootNode(element)) return;
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
     void finish(element);
   };
+  document.addEventListener("mousemove", onMove, true);
   document.addEventListener("click", onClick, true);
+  window.addEventListener("scroll", refresh, true);
+  window.addEventListener("resize", refresh, true);
   document.documentElement.style.cursor = "crosshair";
   window.__bbCopyCleanup = cleanup;
   return true;
@@ -185,14 +271,9 @@ const toastExpression = (text: string, error: boolean) => `
   return true;
 })()`;
 
-const snapshotExpression = `(() => ({
+const pageIdentityExpression = `(() => ({
   documentId: String(performance.timeOrigin) + location.href,
   url: location.href,
-  width: visualViewport ? visualViewport.width : innerWidth,
-  height: visualViewport ? visualViewport.height : innerHeight,
-  scrollX,
-  scrollY,
-  scale: visualViewport ? visualViewport.scale : 1,
 }))()`;
 
 type Connection = ReturnType<typeof connect>;
@@ -320,27 +401,13 @@ async function evaluate(
   return response.result?.value;
 }
 
-async function snapshot(
+async function pageIdentity(
   connection: Connection,
   sessionId: string,
-): Promise<PageSnapshot> {
-  return pageSnapshotSchema.parse(
-    await evaluate(connection, sessionId, snapshotExpression),
-  );
-}
-
-async function stableSnapshot(
-  connection: Connection,
-  sessionId: string,
-): Promise<PageSnapshot> {
-  let previous = await snapshot(connection, sessionId);
-  for (let attempt = 0; attempt < 10; attempt++) {
-    await delay(200);
-    const current = await snapshot(connection, sessionId);
-    if (JSON.stringify(current) === JSON.stringify(previous)) return current;
-    previous = current;
-  }
-  throw new Error("The page kept changing; try again");
+): Promise<{ documentId: string; url: string }> {
+  return z
+    .object({ documentId: z.string().min(1), url: z.string() })
+    .parse(await evaluate(connection, sessionId, pageIdentityExpression));
 }
 
 async function captureViewportPng(
@@ -410,28 +477,15 @@ function writeToast(connection: Connection, sessionId: string, text: string, err
 export default experimental_defineHostEntry({
   contract: hostContract,
   handlers: {
-    measure: async (
-      input: { wsEndpoint: string },
-      context: { signal: AbortSignal },
-    ) => {
-      return withPage(input.wsEndpoint, context.signal, (connection, sessionId) =>
-        stableSnapshot(connection, sessionId),
-      );
-    },
     elementPick: async (
       input: {
         wsEndpoint: string;
-        page: PageSnapshot;
         image: boolean;
       },
       context: { signal: AbortSignal },
     ) => {
       return withPage(input.wsEndpoint, context.signal, async (connection, sessionId) => {
-        const current = await snapshot(connection, sessionId);
-        if (JSON.stringify(current) !== JSON.stringify(input.page)) {
-          await writeToast(connection, sessionId, "The page changed since you started; try again", true);
-          throw new Error("The page changed since you started; try again");
-        }
+        const before = await pageIdentity(connection, sessionId);
         await evaluate(
           connection,
           sessionId,
@@ -457,10 +511,10 @@ export default experimental_defineHostEntry({
         if (picked.ok === false) {
           throw new Error(String(picked.error ?? "Clipboard write failed"));
         }
-        const after = await snapshot(connection, sessionId);
-        if (JSON.stringify(after) !== JSON.stringify(input.page)) {
-          await writeToast(connection, sessionId, "The page changed while picking; try again", true);
-          throw new Error("The page changed while picking; try again");
+        const after = await pageIdentity(connection, sessionId);
+        if (after.documentId !== before.documentId) {
+          await writeToast(connection, sessionId, "The page navigated while picking; try again", true);
+          throw new Error("The page navigated while picking; try again");
         }
         const element = elementInfoSchema.parse(picked.element);
         let image: { mimeType: "image/png"; base64: string; width: number; height: number } | null = null;

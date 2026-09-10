@@ -115,16 +115,10 @@ export default function browserCopy(bb: BbPluginApi): void {
           );
           return { element: null, image: shot.image, copied: shot.copied };
         }
-        const page = await host.call(
-          "measure",
-          { wsEndpoint },
-          { hostId: input.hostId },
-        );
         const picked = await host.call(
           "elementPick",
           {
             wsEndpoint,
-            page,
             image: input.mode === "element-image",
           },
           { hostId: input.hostId },
