@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-browser-copy",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "Click any element in a BB Browser tab and copy it as text or an image.",

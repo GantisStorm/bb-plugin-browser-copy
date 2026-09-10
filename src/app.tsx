@@ -40,13 +40,13 @@ const MODES: readonly CopyMode[] = ["text", "element-image", "screen-image"];
 const MODE_LABELS: Record<CopyMode, string> = {
   text: "Element text",
   "element-image": "Element image",
-  "screen-image": "Screen",
+  "screen-image": "Screenshot",
 };
 
 const MODE_TOASTS: Record<CopyMode, string> = {
   text: "Element text copied",
   "element-image": "Element image copied",
-  "screen-image": "Screen copied",
+  "screen-image": "Screenshot copied",
 };
 
 const TRIGGER_LABEL = "Copy Browser Element";

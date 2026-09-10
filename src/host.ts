@@ -319,7 +319,7 @@ const screenPickExpression = (image: { base64: string }, viewport: { x: number; 
       const bytes = Uint8Array.from(atob(${JSON.stringify(image.base64)}), (c) => c.charCodeAt(0));
       const blob = new Blob([bytes], { type: "image/png" });
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-      __bbToast("Screen copied to the clipboard");
+      __bbToast("Screenshot copied to the clipboard");
       window.__bbCopyDone = { ok: true };
     } catch (e) {
       __bbToast("Clipboard write failed: " + (e && e.message || e), true);
