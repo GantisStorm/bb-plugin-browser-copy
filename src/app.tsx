@@ -269,7 +269,33 @@ function BrowserCopyHeaderAction({
   );
 }
 
+/**
+ * The desktop shell exposes this via `contextBridge.exposeInMainWorld` before any
+ * page script runs; a browser tab never has it. Declaring it here types the read
+ * instead of casting to an invented shape.
+ */
+declare global {
+  interface Window {
+    bbDesktop?: { browser?: unknown };
+  }
+}
+
+/**
+ * This plugin drives the *native* desktop browser, and picking an element means
+ * clicking it in that native view — something a browser client cannot do. So on a
+ * web client the control would only offer an action that cannot be completed.
+ *
+ * `bbDesktop` is the same signal bb's own desktop-only UI uses (`getBbDesktopInfo`
+ * in `apps/app/src/lib/bb-desktop.ts`); the plugin SDK has no platform surface for
+ * it yet.
+ */
+function isDesktopShell(): boolean {
+  if (typeof window === "undefined") return false;
+  return typeof window.bbDesktop === "object" && window.bbDesktop !== null;
+}
+
 export default definePluginApp((app) => {
+  if (!isDesktopShell()) return;
   app.slots.experimental_threadHeaderAction({
     id: "browser-copy",
     title: "Browser Copy",
